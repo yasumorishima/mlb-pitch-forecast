@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: "23 11 * * *"   # daily; does nothing outside the regular season months
+    - cron: "23 11 * * *"   # daily; does nothing outside March to September
 permissions:
   contents: write
 concurrency:
@@ -37,7 +37,9 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
           if [ "$m" -ge 10 ]; then s=$((y + 1)); else s=$y; fi
+          if [ "$m" -ge 3 ] && [ "$m" -le 9 ]; then live=true; else live=false; fi
           echo "serve=$s" >> "$GITHUB_OUTPUT"
+          echo "live=$live" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.guard.outputs.run == 'true'
       - uses: actions/setup-python@v5
@@ -55,17 +57,20 @@ jobs:
             if [ -f data/statcast_$y.parquet.zip ]; then unzip -o -q data/statcast_$y.parquet.zip -d data; fi
           done
           S=${{ steps.guard.outputs.serve }}
-          ARGS="2024=../data/statcast_2024.parquet 2025=../data/statcast_2025.parquet 2026=../data/statcast_2026.parquet"
-          if [ "$S" -ge 2027 ] && [ "$(date -u +%-m)" -ge 3 ] && [ "$(date -u +%-m)" -le 9 ]; then
-            # in season: this season comes from Savant, cached as a release asset and extended daily
-            gh release download "data-$S" -p "statcast_$S.parquet" -D data 2>/dev/null || true
-            BASE=""; [ -f "data/statcast_$S.parquet" ] && BASE="--base data/statcast_$S.parquet"
+          # seasons after 2026 come from Savant, cached as release assets data-<season>
+          for y in $(seq 2027 "$S"); do
+            gh release download "data-$y" -p "statcast_$y.parquet" -D data 2>/dev/null || true
+          done
+          if [ "${{ steps.guard.outputs.live }}" = "true" ] && [ "$S" -ge 2027 ]; then
+            BASE=""; [ -f "data/statcast_$S.parquet" ] && BASE="--base ../data/statcast_$S.parquet"
             (cd src && python fetch_savant.py "$S" "../data/statcast_$S.parquet" $BASE)
             gh release view "data-$S" >/dev/null 2>&1 || gh release create "data-$S" --title "Season $S pitches (Savant)" --notes "Cache for the in-season build."
             gh release upload "data-$S" "data/statcast_$S.parquet" --clobber
-            ARGS="$ARGS $S=../data/statcast_$S.parquet"
           fi
+          ARGS=""
+          for f in data/statcast_*.parquet; do y=$(basename "$f" .parquet | cut -d_ -f2); ARGS="$ARGS $y=../$f"; done
           echo "ARGS=$ARGS" >> "$GITHUB_ENV"
+          echo "$ARGS"
       - name: Savant fetch equals Kaggle
         if: steps.guard.outputs.run == 'true' && inputs.check_fetch
         run: cd src && python fetch_savant.py --check 2026 ../data/statcast_2026.parquet 2026-09-21 2026-09-27
@@ -74,15 +79,19 @@ jobs:
         run: |
           mkdir -p current out
           CUR=""
-          if gh release download model-latest -p model.json -p meta.json -D current 2>/dev/null; then CUR="--current ../current"; fi
+          if gh release download model-latest -p model.json.gz -p meta.json -D current 2>/dev/null; then CUR="--current ../current"; fi
           cd src && python build_serving.py ../out ${{ steps.guard.outputs.serve }} $ARGS $CUR
-      - name: Publish
+      - name: Keep the gate record
+        if: always() && steps.guard.outputs.run == 'true'
+        run: |
+          for f in out/meta.json out/gates.json; do [ -f "$f" ] && { echo "== $f"; cat "$f"; }; done; true
+      - name: Publish (model and state first, meta last)
         if: steps.guard.outputs.run == 'true'
         run: |
-          cat out/meta.json | python -c "import json,sys; m=json.load(sys.stdin); print(json.dumps({k: m[k] for k in ('data_through','model_trained_on','new_model','serve_season')}))"
           gh release view model-latest >/dev/null 2>&1 || gh release create model-latest --title "Served model" --notes "Model and state used by the API; replaced by the build-model workflow."
-          gh release upload model-latest out/model.json out/state.json.gz out/meta.json --clobber
+          gh release upload model-latest out/model.json.gz out/state.json.gz --clobber
+          gh release upload model-latest out/meta.json --clobber
           if [ "$(python -c "import json; print(json.load(open('out/meta.json'))['new_model'])")" = "True" ]; then
             tag="model-$(date -u +%Y%m%d)"
-            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "A newly adopted model (passed the hold-out gate)." out/model.json out/state.json.gz out/meta.json
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "A newly adopted model (passed the hold-out gate)." out/model.json.gz out/state.json.gz out/meta.json
           fi

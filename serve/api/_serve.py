@@ -90,7 +90,7 @@ def features(req, model_state):
          "stand_r": stand_r, "throw_r": throw_r, "same_hand": int(req["stand"] == req["p_throws"]),
          "starter": int(bool(req["starter"])), "pitch_number": req["pitch_number"],
          "game_pitch_n": sum(1 for p in game if p["type"] is not None), "tto": req["tto"],
-         "pa_cls": FIRST if pa_prev is None else type_class(pa_prev["type"], pa_prev.get("description")),
+         "pa_cls": FIRST if pa_prev is None else _counted(pa_prev),
          "pa_speed": np.nan if pa_prev is None else _f(pa_prev.get("speed")),
          "pa_zone": np.nan if pa_prev is None else _f(pa_prev.get("zone")),
          "pa_desc": np.nan if pa_prev is None else _f(DESC_GROUP.get(pa_prev.get("description"))),
@@ -116,10 +116,14 @@ def features(req, model_state):
                 i += 1
         cell = cell_keys(stand_r, req["balls"], req["strikes"], x["pa_cls"])[name]
         v = c.read(cell, i, lam)
-        base = (v + a * base) / (v.sum() + a)
+        # same dtype path as training (pfc): counts and their total stored as float32,
+        # (counts + a * prior) in float64, (total + a) in float32
+        v32 = v.astype(np.float32)
+        t32 = np.float32(v.sum())
+        base = (v32 + a * base) / (t32 + np.float32(a))
         out[name] = base
         if name == "F2":
-            x["n_f2"] = float(v.sum())
+            x["n_f2"] = t32
     for name in ("F1", "F2", "F3"):
         for k, cn in enumerate(CLASSES):
             x[f"{name}_{cn}"] = out[name][k]
@@ -134,7 +138,7 @@ def features(req, model_state):
             bc.add((), k, i, lam_b)
             i += 1
     bv = bc.read((), i, lam_b)
-    bp = (bv + 1.0) / (bv.sum() + K)
+    bp = (bv.astype(np.float32) + np.float32(1.0)) / (np.float32(bv.sum()) + np.float32(K))   # float32 as in training
     gm = np.zeros(K)
     for p in game:
         k = type_class(p["type"], p.get("description"))
@@ -152,31 +156,77 @@ def _f(v):
     return np.nan if v is None else float(v)
 
 
+def _counted(p):
+    k = type_class(p.get("type"), p.get("description"))
+    if k < 0:
+        raise ValueError("pa_prev must be a counted pitch (not a pitchout, intentional ball or automatic call)")
+    return k
+
+
 def _cls_of(v):
     """Previous-pitch class given as an index (0..9) or a pitch-type code; None/"FIRST" = first pitch."""
     if v is None or v == "FIRST":
         return FIRST
     if isinstance(v, (int, np.integer)):
+        if not 0 <= int(v) <= FIRST:
+            raise ValueError("pa_prev index must be 0-9")
         return int(v)
     k = type_class(v)
-    return FIRST if k < 0 else k
+    if k < 0:
+        raise ValueError(f"pa_prev {v!r} is not a counted pitch type")
+    return k
 
 
 # ---- LightGBM model evaluated from its JSON dump (no lightgbm at serving time) ----------
 
+MISSING = {"None": 0, "Zero": 1, "NaN": 2}
+
+
+def compact(dump):
+    """LightGBM dump_model() -> compact arrays. A tree is {"n": nodes, "l": leaves};
+    node = [feature, threshold or [categories], is_categorical, default_left, missing_type, left, right],
+    a child index >= 0 is a node, < 0 is leaf -(index + 1)."""
+    trees = []
+    for t in dump["tree_info"]:
+        nodes, leaves = [], []
+
+        def walk(nd):
+            if "leaf_value" in nd:
+                leaves.append(nd["leaf_value"])
+                return -len(leaves)
+            i = len(nodes)
+            nodes.append(None)
+            cat = nd["decision_type"] == "=="
+            thr = sorted(int(c) for c in str(nd["threshold"]).split("||")) if cat else nd["threshold"]
+            left, right = walk(nd["left_child"]), walk(nd["right_child"])
+            nodes[i] = [nd["split_feature"], thr, int(cat), int(nd.get("default_left", False)),
+                        MISSING[nd.get("missing_type", "None")], left, right]
+            return i
+
+        root = walk(t["tree_structure"])
+        trees.append({"n": nodes, "l": leaves, "r": root})
+    return {"num_class": dump["num_class"], "feature_names": dump["feature_names"], "trees": trees}
+
+
 class Booster:
-    def __init__(self, dump):
-        self.names = dump["feature_names"]
-        self.k = dump["num_class"]
-        self.trees = [t["tree_structure"] for t in dump["tree_info"]]
+    def __init__(self, model):
+        if "tree_info" in model:
+            model = compact(model)
+        self.k = model["num_class"]
+        self.names = model["feature_names"]
+        self.trees = []
+        for t in model["trees"]:
+            nodes = [(f, set(th) if c else th, c, dl, mt, l, r) for f, th, c, dl, mt, l, r in t["n"]]
+            self.trees.append((nodes, t["l"], t["r"]))
 
     def raw(self, row):
         """row: list of float in feature order (NaN = missing)."""
         s = np.zeros(self.k)
-        for t, node in enumerate(self.trees):
-            while "leaf_value" not in node:
-                node = node["left_child"] if _go_left(node, row[node["split_feature"]]) else node["right_child"]
-            s[t % self.k] += node["leaf_value"]
+        for t, (nodes, leaves, i) in enumerate(self.trees):
+            while i >= 0:
+                f, th, c, dl, mt, l, r = nodes[i]
+                i = l if _go_left(row[f], th, c, dl, mt) else r
+            s[t % self.k] += leaves[-i - 1]
         return s
 
     def predict(self, row):
@@ -185,20 +235,16 @@ class Booster:
         return z / z.sum()
 
 
-def _go_left(node, v):
+def _go_left(v, th, cat, default_left, mt):
     missing = v is None or (isinstance(v, float) and math.isnan(v))
-    if node["decision_type"] == "==":
+    if cat:
         if missing or v < 0:
             return False
-        cats = node.get("_cats")
-        if cats is None:
-            cats = node["_cats"] = {int(c) for c in str(node["threshold"]).split("||")}
-        return int(v) in cats
-    mt = node.get("missing_type", "None")
-    if mt == "NaN" and missing:
-        return node["default_left"]
-    if mt == "Zero" and (missing or v == 0.0):
-        return node["default_left"]
+        return int(v) in th
+    if mt == 2 and missing:
+        return bool(default_left)
+    if mt == 1 and (missing or v == 0.0):
+        return bool(default_left)
     if missing:
         v = 0.0
-    return v <= node["threshold"]
+    return v <= th
