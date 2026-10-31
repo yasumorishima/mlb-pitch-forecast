@@ -12,7 +12,7 @@ Data: every regular-season pitch from Baseball Savant, via the Kaggle dataset [M
 
 ## API
 
-The frozen model is served as a free JSON API from `serve/` (Vercel, Python function, numpy only).
+The frozen model is served as a free JSON API at **https://mlb-pitch-forecast.vercel.app/api/predict** from `serve/` (Vercel, Python function, numpy only).
 
 - `GET /api/predict`: model info, the date the data runs through, and an example request with its answer.
 - `POST /api/predict`: one pitch about to be thrown. Required fields: `pitcher`, `batter` (MLBAM ids), `stand`, `p_throws` (`"L"`/`"R"`), `starter`, `balls`, `strikes`, `outs`, `on_1b`, `on_2b`, `on_3b`, `inning`, `top`, `score_diff` (fielding side minus batting side), `pitch_number` (in the plate appearance), `tto` (times this batter has faced the pitcher today, this one included), `at_bat`. Optional: `game_pitches` (this pitcher's earlier pitches today, in order: `type`, `speed`, `zone`, `description`, `balls`, `strikes`, `stand`, `at_bat`), `batter_game_pitches` (pitches the batter has seen today), `pa_prev` (the previous pitch of this plate appearance when another pitcher threw it).
