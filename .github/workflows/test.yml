@@ -25,7 +25,7 @@ jobs:
       - name: Refuse if not frozen or already scored
         run: |
           test -f FREEZE.json
-          git fetch origin results
+          git fetch origin +refs/heads/results:refs/remotes/origin/results
           if git ls-tree -r --name-only origin/results | grep -q '^results/test_'; then echo "2026 was already scored"; exit 1; fi
       - name: Fetch the three seasons
         env:

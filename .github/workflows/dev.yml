@@ -51,7 +51,7 @@ jobs:
           name="dev_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}$([ "${{ inputs.quick }}" = "true" ] && echo _quick).json"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin results || true
-          if git rev-parse --verify origin/results >/dev/null 2>&1; then git switch -c results origin/results; else git switch --orphan results; git rm -rf -q . || true; fi
+          git fetch origin +refs/heads/results:refs/remotes/origin/results || true
+          if git rev-parse --verify -q origin/results >/dev/null; then git switch -c results origin/results; else git switch --orphan results; git rm -rf -q . || true; fi
           mkdir -p results && cp out/dev.json "results/$name"
           git add results && git commit -q -m "dev result ${{ github.sha }} ($MEMO)" && git push origin results

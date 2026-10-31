@@ -32,7 +32,7 @@ Counts use every pitch strictly before *k* (earlier dates and earlier pitches of
 - **F1** the pitcher's own mix, shrunk toward the league mix of his role (starter / reliever).
 - **F2** pitcher × batter side × count (12 counts), shrunk toward F1.
 - **F3** pitcher × count × previous pitch type in the plate appearance ("first pitch" as its own level), shrunk toward F2.
-Pseudo-counts (grid 0.3, 1, 3, 10, 30, 100, 300, 1000) and the half-life (grid 100, 250, 500, 1000, 2000, 4000 pitches, or none; widened after the 40-day code check picked edges) are chosen on validation, separately for each floor, to minimise that floor's own log loss (the floors get the same tuning effort as the model).
+Pseudo-counts (grid 0.03, 0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000) and the half-life (grid 25, 50, 100, 250, 500, 1000, 2000, 4000 pitches, or none; widened twice because the 40-day code check and then the first full development run picked edges for F1 and F3 — a floor tuned at a grid edge would flatter the model) are chosen on validation, separately for each floor, to minimise that floor's own log loss (the floors get the same tuning effort as the model).
 
 ## Model
 **M:** LightGBM multiclass on the state features, F1–F3 computed as of *k* (never from the full season), the pitcher's mix earlier in this game, and the batter's decayed mix of pitches seen (half-life 1,000 pitches, add-one smoothing). Hyper-parameters and the number of boosting rounds are chosen on validation only (early stopping on the July-onward rows while training on rows through June); the frozen configuration is retrained once on all of 2025 with that same number of rounds.
@@ -65,3 +65,6 @@ The `freeze` workflow writes `FREEZE.json` from the full development result on t
 ## Delivery and MLOps (after the test, whatever the verdict)
 - The frozen model is served as a free JSON API (Vercel Hobby, Python function): state in, nine probabilities out.
 - In-season retraining on GitHub Actions: fetch the new week from Savant, retrain, and publish only if the 95% upper bound of (new − current) log loss on the most recent unseen week is ≤ 0.
+
+## Development log
+- 2026-10-31, run 41190371915 (commit afb6cbf, full development data): all development gates passed; validation log loss M 1.1846, F3 1.2429, F2 1.2435, F1 1.3287. F1 (h 100, a 0.3) and F3 (h 100) sat on grid edges, so the grids were widened and the development run repeated; that run's result (not this one) is the one frozen. The result file of this run was not saved to the `results` branch (a fetch refspec bug in the save step); its numbers are in the run log.

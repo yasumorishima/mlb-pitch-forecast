@@ -59,14 +59,15 @@ jobs:
           gh run view "$DEV_RUN" --log | grep -oE '[0-9a-f]{32}  data/statcast_20(24|25)\.parquet' | sort -u > dev_md5.txt
           md5sum data/statcast_2024.parquet data/statcast_2025.parquet | sort > now_md5.txt
           cat dev_md5.txt now_md5.txt
-          [ "$(wc -l < dev_md5.txt)" = "2" ] && diff dev_md5.txt now_md5.txt
+          if [ "$(wc -l < dev_md5.txt)" != "2" ]; then echo "md5 lines not found in the dev log"; exit 1; fi
+          if ! diff dev_md5.txt now_md5.txt; then echo "2024/2025 files differ from the dev run"; exit 1; fi
           rm dev_md5.txt now_md5.txt
       - name: Write and commit FREEZE.json
         env:
           DEV_RESULT: ${{ inputs.dev_result }}
           MEMO: ${{ inputs.memo }}
         run: |
-          git fetch origin results
+          git fetch origin +refs/heads/results:refs/remotes/origin/results
           git show "origin/results:results/$DEV_RESULT" > dev_result.json
           cd src && python freeze.py ../dev_result.json "$DEV_RESULT" "$GITHUB_SHA" \
             ../data/statcast_2024.parquet ../data/statcast_2025.parquet ../data/statcast_2026.parquet "$(cat ../data/version.txt)"
