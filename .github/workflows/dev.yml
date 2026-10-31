@@ -48,7 +48,9 @@ jobs:
         run: |
           [ -f out/dev.json ] || exit 0
           cat out/dev.json
-          name="dev_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}$([ "${{ inputs.quick }}" = "true" ] && echo _quick).json"
+          suffix=""
+          if [ "${{ inputs.quick }}" = "true" ]; then suffix="_quick"; fi
+          name="dev_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}${suffix}.json"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin +refs/heads/results:refs/remotes/origin/results || true
