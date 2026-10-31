@@ -1,6 +1,8 @@
-# Next-pitch forecast — pre-registration (v2, development phase; the test section is frozen by FREEZE.md before the test runs)
+# Next-pitch forecast — pre-registration (v3, development phase; the test section is frozen by FREEZE.json before the test runs)
 
 v2 (before any run): code audit findings folded in: cut-frame gate with planted defects, one-sided shuffle gate, feature list, pitchouts and intentional balls left out of type counts.
+
+v3 (during the full development run, before any test code ran): test-phase audit folded in: gates run before scoring, freeze tied to the development result and to all three file md5s, F2 tolerance stated in absolute terms, training length, cold-start definition.
 
 ## Question
 Before a pitch is thrown, a dugout knows the pitcher, the batter, the count, the runners, the score, and every earlier pitch. How well does that predict **which pitch type comes next**, and does a model add anything over the tables a scout already carries: *this pitcher's usage by count and batter side*, and *by count and the previous pitch*?
@@ -33,18 +35,18 @@ Counts use every pitch strictly before *k* (earlier dates and earlier pitches of
 Pseudo-counts (grid 0.3, 1, 3, 10, 30, 100, 300, 1000) and the half-life (grid 100, 250, 500, 1000, 2000, 4000 pitches, or none; widened after the 40-day code check picked edges) are chosen on validation, separately for each floor, to minimise that floor's own log loss (the floors get the same tuning effort as the model).
 
 ## Model
-**M:** LightGBM multiclass on the state features, F1–F3 computed as of *k* (never from the full season), the pitcher's mix earlier in this game, and the batter's decayed mix of pitches seen (half-life 1,000 pitches, add-one smoothing). Hyper-parameters chosen on validation only; the frozen configuration is retrained once on all of 2025.
+**M:** LightGBM multiclass on the state features, F1–F3 computed as of *k* (never from the full season), the pitcher's mix earlier in this game, and the batter's decayed mix of pitches seen (half-life 1,000 pitches, add-one smoothing). Hyper-parameters and the number of boosting rounds are chosen on validation only (early stopping on the July-onward rows while training on rows through June); the frozen configuration is retrained once on all of 2025 with that same number of rounds.
 
 ## Hypotheses (test season 2026)
 - **H1:** mean log loss per pitch, M − F2 ≤ −0.010 nats.
 - **H2:** mean log loss per pitch, M − F3 ≤ −0.010 nats.
-Inference: bootstrap over **pitchers** (2,000 draws). A hypothesis is SUPPORTED when the upper end of its one-sided interval is below −0.010; the two are corrected together by Holm (α = 0.05). Sensitivity, no verdict: two-way pitcher × game bootstrap.
+Inference: bootstrap over **pitchers** (2,000 draws) of the pitch-weighted mean difference; p = share of draws at or above −0.010. Holm over the two (α = 0.05): a hypothesis is SUPPORTED when its p is at or below its Holm level, which is the same as the upper end of the one-sided interval at that level being below −0.010 (both bounds are reported). Sensitivity, no verdict: two-way pitcher × game bootstrap.
 
 ## Published with every run
-The list of pitcher-seasons dropped as position players.
+The pitcher-seasons dropped as position players (only ids that actually threw a counted pitch).
 
 ## Reported, no verdict
-Accuracy and top-2 accuracy; Brier; per-class calibration; fastball (FF/SI/FC) vs other AUC (for prior work); the gain by count, by times through the order, for pitchers with < 300 prior pitches; the gain per pitcher (pitcher-weighted mean and the share of pitchers where M beats F3).
+Accuracy and top-2 accuracy; Brier; per-class calibration; fastball (FF/SI/FC) vs other AUC (for prior work); the gain by count, by times through the order, for pitchers with < 300 prior pitches (undecayed count of his earlier counted pitches, previous season plus season to date); the gain per pitcher (pitcher-weighted mean and the share of pitchers where M beats F3).
 
 ## Gates (a failed gate stops the run; nothing is adjusted to pass it)
 - **Sequence:** each pitch is unique on (`game_pk`, `at_bat_number`, `pitch_number`); `pitch_number` runs 1..n without gaps in each plate appearance; each pitch's balls/strikes follow from the previous pitch's description, with at most 5 exceptions per season, all printed (measured before this gate was written: 1 of 529,030 transitions in 2024, which is history only).
@@ -53,11 +55,12 @@ Accuracy and top-2 accuracy; Brier; per-class calibration; fastball (FF/SI/FC) v
 - **Independent counts:** F1–F3 cell counts and the batter's counts for 1,500 random validation pitches plus up to 200 doubleheader second-game pitches (pitcher's, batter's), recomputed as plain weighted sums, match to 1e-5 (relative); the same check on the planted same-date defect must exceed 1e-5.
 - **Planted leak:** adding the current pitch's speed must lower validation loss by more than 0.2 nats (the leak checks can see a leak).
 - **Shuffle:** with `pitch_type` shuffled within pitcher-season and M refitted (early-stopped on the last 20% of training dates), M must not beat F1 by more than 0.02 nats on validation (one-sided: the in-game mix legitimately carries this season's mix).
-- **Independent F2:** F2 on the test season recomputed by a second implementation must match to 1e-9.
+- **Independent F2:** for 5,000 random 2026 pitches plus up to 200 doubleheader second-game pitches, the F1 → F2 chain recomputed by a second implementation must match within 1e-6 (absolute, per class; counts are stored as float32, whose relative error measured 5e-8 in the code check); the same check against the planted same-date defect must exceed 1e-6.
+- **Order:** every gate runs before any 2026 pitch is scored; a failed gate writes the gate results only and exits.
 - **Coverage:** the 2026 file runs to the last day of the regular season.
 
 ## Freeze
-Before the test job runs, `FREEZE.md` records the code SHA, the configuration, the validation numbers, and the 2026 file's md5 and Kaggle dataset version. The test job refuses to run on any other SHA or md5.
+The `freeze` workflow writes `FREEZE.json` from the full development result on the `results` branch: the code commit, the development commit and result file, the floors and model settings, the validation numbers, the md5 of all three season files and the Kaggle dataset version (2026 is hashed, not read). The `test` job refuses to run unless the code (src, requirements, workflows, PLAN.md) is unchanged since the frozen commit, the modelling code is unchanged since the development run, the settings equal the development result, and all three md5s match; it also refuses if a test result already exists.
 
 ## Delivery and MLOps (after the test, whatever the verdict)
 - The frozen model is served as a free JSON API (Vercel Hobby, Python function): state in, nine probabilities out.

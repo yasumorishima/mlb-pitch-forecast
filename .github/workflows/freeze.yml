@@ -1,0 +1,56 @@
+name: freeze
+on:
+  workflow_dispatch:
+    inputs:
+      memo:
+        description: why this run
+        required: true
+      dev_result:
+        description: file name of the full development result on the results branch
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: freeze
+  cancel-in-progress: false
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Refuse if already frozen
+        run: test ! -f FREEZE.json
+      - name: Fetch the three seasons (2026 is hashed, not read)
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p data
+          for y in 2024 2025 2026; do
+            kaggle datasets download yasunorim/mlb-statcast-bat-tracking-2024-2025 -f statcast_$y.parquet -p data
+            if [ -f data/statcast_$y.parquet.zip ]; then unzip -o -q data/statcast_$y.parquet.zip -d data; fi
+          done
+          curl -sS --max-time 30 -u "$KAGGLE_USERNAME:$KAGGLE_KEY" \
+            https://www.kaggle.com/api/v1/datasets/view/yasunorim/mlb-statcast-bat-tracking-2024-2025 \
+            | python -c "import json,sys; print(json.load(sys.stdin).get('currentVersionNumber'))" > data/version.txt
+          cat data/version.txt
+      - name: Write and commit FREEZE.json
+        env:
+          DEV_RESULT: ${{ inputs.dev_result }}
+          MEMO: ${{ inputs.memo }}
+        run: |
+          git fetch origin results
+          git show "origin/results:results/$DEV_RESULT" > dev_result.json
+          cd src && python freeze.py ../dev_result.json "$DEV_RESULT" "$GITHUB_SHA" \
+            ../data/statcast_2024.parquet ../data/statcast_2025.parquet ../data/statcast_2026.parquet "$(cat ../data/version.txt)"
+          cd .. && rm dev_result.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add FREEZE.json && git commit -q -m "Freeze for the 2026 test ($MEMO)" && git push origin HEAD:main

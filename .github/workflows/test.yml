@@ -1,0 +1,56 @@
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      memo:
+        description: why this run
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: test
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Refuse if not frozen or already scored
+        run: |
+          test -f FREEZE.json
+          git fetch origin results
+          if git ls-tree -r --name-only origin/results | grep -q '^results/test_'; then echo "2026 was already scored"; exit 1; fi
+      - name: Fetch the three seasons
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p data
+          for y in 2024 2025 2026; do
+            kaggle datasets download yasunorim/mlb-statcast-bat-tracking-2024-2025 -f statcast_$y.parquet -p data
+            if [ -f data/statcast_$y.parquet.zip ]; then unzip -o -q data/statcast_$y.parquet.zip -d data; fi
+          done
+      - name: Score 2026 once
+        run: |
+          mkdir -p out
+          cd src && python test.py ../data/statcast_2024.parquet ../data/statcast_2025.parquet ../data/statcast_2026.parquet ../out/test.json
+      - name: Keep the result on the results branch
+        if: always()
+        env:
+          MEMO: ${{ inputs.memo }}
+        run: |
+          [ -f out/test.json ] || exit 0
+          cat out/test.json
+          name="test_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}.json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c results origin/results
+          mkdir -p results && cp out/test.json "results/$name"
+          git add results && git commit -q -m "test result ${{ github.sha }} ($MEMO)" && git push origin results
