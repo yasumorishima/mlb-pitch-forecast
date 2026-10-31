@@ -1,0 +1,88 @@
+name: build-model
+on:
+  workflow_dispatch:
+    inputs:
+      memo:
+        description: why this run
+        required: true
+      check_fetch:
+        description: also fetch 2026-09-21..27 from Savant and require it to equal the Kaggle file
+        type: boolean
+        default: false
+  schedule:
+    - cron: "23 11 * * *"   # daily; does nothing outside the regular season months
+permissions:
+  contents: write
+concurrency:
+  group: build-model
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+      KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+      DS: yasunorim/mlb-statcast-bat-tracking-2024-2025
+    steps:
+      - name: Season guard
+        id: guard
+        run: |
+          y=$(date -u +%Y); m=$(date -u +%-m)
+          # regular season = March to September; from October the served season is next year
+          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$m" -lt 3 ] || [ "$m" -gt 9 ]; }; then
+            echo "off season; nothing to do"; echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$m" -ge 10 ]; then s=$((y + 1)); else s=$y; fi
+          echo "serve=$s" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.run == 'true'
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+      - if: steps.guard.outputs.run == 'true'
+        run: pip install -r requirements.txt
+      - name: Data
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          mkdir -p data
+          for y in 2024 2025 2026; do
+            kaggle datasets download "$DS" -f statcast_$y.parquet -p data
+            if [ -f data/statcast_$y.parquet.zip ]; then unzip -o -q data/statcast_$y.parquet.zip -d data; fi
+          done
+          S=${{ steps.guard.outputs.serve }}
+          ARGS="2024=../data/statcast_2024.parquet 2025=../data/statcast_2025.parquet 2026=../data/statcast_2026.parquet"
+          if [ "$S" -ge 2027 ] && [ "$(date -u +%-m)" -ge 3 ] && [ "$(date -u +%-m)" -le 9 ]; then
+            # in season: this season comes from Savant, cached as a release asset and extended daily
+            gh release download "data-$S" -p "statcast_$S.parquet" -D data 2>/dev/null || true
+            BASE=""; [ -f "data/statcast_$S.parquet" ] && BASE="--base data/statcast_$S.parquet"
+            (cd src && python fetch_savant.py "$S" "../data/statcast_$S.parquet" $BASE)
+            gh release view "data-$S" >/dev/null 2>&1 || gh release create "data-$S" --title "Season $S pitches (Savant)" --notes "Cache for the in-season build."
+            gh release upload "data-$S" "data/statcast_$S.parquet" --clobber
+            ARGS="$ARGS $S=../data/statcast_$S.parquet"
+          fi
+          echo "ARGS=$ARGS" >> "$GITHUB_ENV"
+      - name: Savant fetch equals Kaggle
+        if: steps.guard.outputs.run == 'true' && inputs.check_fetch
+        run: cd src && python fetch_savant.py --check 2026 ../data/statcast_2026.parquet 2026-09-21 2026-09-27
+      - name: Build and gate
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          mkdir -p current out
+          CUR=""
+          if gh release download model-latest -p model.json -p meta.json -D current 2>/dev/null; then CUR="--current ../current"; fi
+          cd src && python build_serving.py ../out ${{ steps.guard.outputs.serve }} $ARGS $CUR
+      - name: Publish
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          cat out/meta.json | python -c "import json,sys; m=json.load(sys.stdin); print(json.dumps({k: m[k] for k in ('data_through','model_trained_on','new_model','serve_season')}))"
+          gh release view model-latest >/dev/null 2>&1 || gh release create model-latest --title "Served model" --notes "Model and state used by the API; replaced by the build-model workflow."
+          gh release upload model-latest out/model.json out/state.json.gz out/meta.json --clobber
+          if [ "$(python -c "import json; print(json.load(open('out/meta.json'))['new_model'])")" = "True" ]; then
+            tag="model-$(date -u +%Y%m%d)"
+            gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "A newly adopted model (passed the hold-out gate)." out/model.json out/state.json.gz out/meta.json
+          fi
