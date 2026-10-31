@@ -30,7 +30,7 @@ Counts use every pitch strictly before *k* (earlier dates and earlier pitches of
 - **F1** the pitcher's own mix, shrunk toward the league mix of his role (starter / reliever).
 - **F2** pitcher × batter side × count (12 counts), shrunk toward F1.
 - **F3** pitcher × count × previous pitch type in the plate appearance ("first pitch" as its own level), shrunk toward F2.
-Pseudo-counts (grid 1, 3, 10, 30, 100, 300) and the half-life (grid 250, 500, 1000, 2000, 4000 pitches, or none) are chosen on validation, separately for each floor, to minimise that floor's own log loss (the floors get the same tuning effort as the model).
+Pseudo-counts (grid 0.3, 1, 3, 10, 30, 100, 300, 1000) and the half-life (grid 100, 250, 500, 1000, 2000, 4000 pitches, or none; widened after the 40-day code check picked edges) are chosen on validation, separately for each floor, to minimise that floor's own log loss (the floors get the same tuning effort as the model).
 
 ## Model
 **M:** LightGBM multiclass on the state features, F1–F3 computed as of *k* (never from the full season), the pitcher's mix earlier in this game, and the batter's decayed mix of pitches seen (half-life 1,000 pitches, add-one smoothing). Hyper-parameters chosen on validation only; the frozen configuration is retrained once on all of 2025.
