@@ -13,7 +13,7 @@ import pandas as pd
 
 import pfc
 
-H_GRID = [25, 50, 100, 250, 500, 1000, 2000, 4000, None]
+H_GRID = [5, 10, 25, 50, 100, 250, 500, 1000, 2000, 4000, None]
 A_GRID = [0.03, 0.1, 0.3, 1, 3, 10, 30, 100, 300, 1000]
 LGB_GRID = [{"num_leaves": 63}, {"num_leaves": 255}]
 LGB_BASE = {"objective": "multiclass", "num_class": pfc.K, "learning_rate": 0.05,
