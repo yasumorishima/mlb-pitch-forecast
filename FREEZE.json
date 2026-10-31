@@ -1,0 +1,43 @@
+{
+ "code_sha": "a5e797f73adf905aa0befb4045aa234776d2fe23",
+ "dev_sha": "98d7b563591a4ca5361e7fbaecffbb5105082eb9",
+ "dev_result": "dev_20261031T122525Z_98d7b563591a4ca5361e7fbaecffbb5105082eb9.json",
+ "floors": {
+  "F1": {
+   "h": 50,
+   "a": 0.3,
+   "val_logloss": 1.3257079663506643
+  },
+  "F2": {
+   "h": 500,
+   "a": 10,
+   "val_logloss": 1.2390002190649212
+  },
+  "F3": {
+   "h": 25,
+   "a": 100,
+   "val_logloss": 1.238161034556653
+  },
+  "F0": {
+   "val_logloss": 1.8915914485186704
+  }
+ },
+ "model": {
+  "params": {
+   "num_leaves": 63
+  },
+  "best_iteration": 223
+ },
+ "validation": {
+  "model_val_logloss": 1.181899718583898,
+  "minus_F2": -0.05710050048102322,
+  "minus_F3": -0.056261315972754966
+ },
+ "md5": {
+  "2024": "1e59aa536f7741d0e6981eb9e80b88b3",
+  "2025": "9aaf0ae673cc5b3f7ab29598da418abe",
+  "2026": "49cbf1be3bc454a7769ca447f2ad8e03"
+ },
+ "kaggle_dataset": "yasunorim/mlb-statcast-bat-tracking-2024-2025",
+ "kaggle_version": "2"
+}
