@@ -48,7 +48,9 @@ jobs:
         run: |
           [ -f out/test.json ] || exit 0
           cat out/test.json
-          name="test_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}.json"
+          started=$(python -c "import json; print(json.load(open('out/test.json')).get('scoring_started', False))")
+          prefix=testgate; [ "$started" = "True" ] && prefix=test
+          name="${prefix}_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}.json"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c results origin/results

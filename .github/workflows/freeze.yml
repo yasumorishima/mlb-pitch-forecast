@@ -8,8 +8,12 @@ on:
       dev_result:
         description: file name of the full development result on the results branch
         required: true
+      dev_run_id:
+        description: the GitHub Actions run that produced it
+        required: true
 permissions:
   contents: write
+  actions: read
 concurrency:
   group: freeze
   cancel-in-progress: false
@@ -41,6 +45,22 @@ jobs:
             https://www.kaggle.com/api/v1/datasets/view/yasunorim/mlb-statcast-bat-tracking-2024-2025 \
             | python -c "import json,sys; print(json.load(sys.stdin).get('currentVersionNumber'))" > data/version.txt
           cat data/version.txt
+      - name: Same 2024 and 2025 bytes as the development run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEV_RUN: ${{ inputs.dev_run_id }}
+          DEV_RESULT: ${{ inputs.dev_result }}
+        run: |
+          info=$(gh run view "$DEV_RUN" --json headSha,conclusion,workflowName --jq '.workflowName+" "+.conclusion+" "+.headSha')
+          echo "$info"
+          sha=$(echo "$info" | cut -d' ' -f3)
+          [ "$(echo "$info" | cut -d' ' -f1-2)" = "dev success" ] || { echo "not a successful dev run"; exit 1; }
+          case "$DEV_RESULT" in *"_${sha}.json") ;; *) echo "result file is not from run $DEV_RUN"; exit 1;; esac
+          gh run view "$DEV_RUN" --log | grep -oE '[0-9a-f]{32}  data/statcast_20(24|25)\.parquet' | sort -u > dev_md5.txt
+          md5sum data/statcast_2024.parquet data/statcast_2025.parquet | sort > now_md5.txt
+          cat dev_md5.txt now_md5.txt
+          [ "$(wc -l < dev_md5.txt)" = "2" ] && diff dev_md5.txt now_md5.txt
+          rm dev_md5.txt now_md5.txt
       - name: Write and commit FREEZE.json
         env:
           DEV_RESULT: ${{ inputs.dev_result }}

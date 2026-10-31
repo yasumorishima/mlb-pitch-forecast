@@ -41,6 +41,12 @@ def md5(path):
 
 
 def check_freeze(fz, paths):
+    commits = git("log", "--format=%H", "--", "FREEZE.json").stdout.split()
+    assert len(commits) == 1, f"FREEZE.json was written by {len(commits)} commits"
+    f = commits[0]
+    assert git("rev-parse", f + "^").stdout.strip() == fz["code_sha"], "the freeze commit is not on top of the frozen code"
+    changed = git("diff", "--name-only", fz["code_sha"], f).stdout.split()
+    assert changed == ["FREEZE.json"], f"the freeze commit changed {changed}"
     for sha in (fz["code_sha"], fz["dev_sha"]):
         assert git("cat-file", "-e", sha + "^{commit}").returncode == 0, f"commit {sha} not found"
     r = git("diff", "--quiet", fz["code_sha"], "HEAD", "--", "src", "requirements.txt", ".github/workflows", "PLAN.md")
@@ -146,8 +152,11 @@ def run(p24, p25, p26, out):
     bad = pfc.sequence_gate(rawB)
     posB = pfc.position_players(rawB)
     dB = pfc.prepare(rawB, posB)
+    del rawB
     te = np.where(((dB["season"] == 2026) & dB["scored"]).to_numpy())[0]
     XB, fl = pfc.make_X(dB, cfg)
+    st = dB[["balls", "strikes", "tto"]].iloc[te].reset_index(drop=True)
+    prior_n = pfc.asof_counts(dB, "pitcher", [], None)[1][te]
 
     # ---- gates, before anything is scored
     rng7 = np.random.default_rng(7)
@@ -155,8 +164,7 @@ def run(p24, p25, p26, out):
     sample = np.r_[rng7.choice(te, min(5000, len(te)), replace=False),
                    rng7.choice(dh, min(200, len(dh)), replace=False) if len(dh) else np.array([], int)].astype(int)
     worst = independent_f2(dB, cfg, fl, sample)
-    _, fl_broken = pfc.make_X(dB, cfg, broken="no_sameday") if len(dh) else (None, None)
-    worst_broken = independent_f2(dB, cfg, fl_broken, sample) if len(dh) else None
+    worst_broken = independent_f2(dB, cfg, pfc.floors(dB, cfg, broken="no_sameday"), sample) if len(dh) else None
     gates = {"coverage": {"last_date_2026": str(last.date()), "pass": True},
              "independent_F2": {"n": int(len(sample)), "doubleheader_rows": int(min(200, len(dh))),
                                 "worst_abs_diff": worst, "pass": worst < F2_TOL},
@@ -166,13 +174,19 @@ def run(p24, p25, p26, out):
     dropped = sorted({f"{s}:{p}" for s, p in zip(dB["season"].to_numpy()[dB["cls"].to_numpy() >= 0],
                                                   dB["pitcher"].to_numpy()[dB["cls"].to_numpy() >= 0]) if (s, p) in posB})
     res = {"md5": md5s, "rows_2026": int(len(te)), "illegal_transitions": bad.astype(str).to_dict("records"),
-           "position_players_dropped": dropped, "gates": gates}
-    if not all(v["pass"] for v in gates.values()):
+           "position_players_dropped": dropped, "gates": gates, "scoring_started": False}
+
+    def dump():
         with open(out, "w") as f:
             json.dump(res, f, indent=1, default=str)
+
+    if not all(v["pass"] for v in gates.values()):
+        dump()
         sys.exit(1)
 
-    # ---- scoring
+    # ---- scoring (recorded as started before the first prediction, so a crash still counts as the one run)
+    res["scoring_started"] = True
+    dump()
     y = dB["cls"].to_numpy()[te]
     pm = model.predict(XB.iloc[te])
     loss = {"M": pfc.logloss_rows(pm, y)}
@@ -200,8 +214,16 @@ def run(p24, p25, p26, out):
                                      "upper_at_holm_level": float(np.quantile(boots[h], 1 - alpha)),
                                      "verdict": "SUPPORTED" if ok else "NOT SUPPORTED"})
         alive = ok
+    dump()
+    try:
+        res["reported"] = reported(pm, y, fl, te, loss, st, prior_n, pitcher)
+    except Exception as e:  # the verdicts above are already recorded
+        res["reported"] = {"error": repr(e)}
+    dump()
+    dev.log("H1", res["hypotheses"]["H1"]["verdict"], "H2", res["hypotheses"]["H2"]["verdict"])
 
-    # ---- reported, no verdict
+
+def reported(pm, y, fl, te, loss, st, prior_n, pitcher):
     rep = {"accuracy": float((pm.argmax(1) == y).mean()),
            "top2_accuracy": float((np.argsort(-pm, 1)[:, :2] == y[:, None]).any(1).mean()),
            "brier": float(((pm - np.eye(pfc.K)[y]) ** 2).sum(1).mean())}
@@ -210,20 +232,15 @@ def run(p24, p25, p26, out):
     fb = np.isin(y, [0, 1, 2])
     rep["fastball_auc"] = {"M": auc(pm[:, :3].sum(1), fb), "F3": auc(fl["F3"][0][te][:, :3].sum(1), fb)}
     diff3 = loss["M"] - loss["F3"]
-    st = dB.iloc[te]
     rep["gain_vs_F3_by_count"] = {f"{b}-{s}": float(diff3[(st["balls"] == b).to_numpy() & (st["strikes"] == s).to_numpy()].mean())
                                   for b in range(4) for s in range(3)}
     rep["gain_vs_F3_by_tto"] = {int(t): float(diff3[(st["tto"].clip(upper=4) == t).to_numpy()].mean()) for t in range(1, 5)}
-    prior_n = pfc.asof_counts(dB, "pitcher", [], None)[1][te]
     cold = prior_n < 300
     rep["cold_start"] = {"pitches": int(cold.sum()), "gain_vs_F3": float(diff3[cold].mean()) if cold.any() else None}
     per = pd.DataFrame({"p": pitcher, "d": diff3}).groupby("p")["d"].mean()
     rep["per_pitcher"] = {"pitchers": int(len(per)), "pitcher_weighted_mean_gain_vs_F3": float(per.mean()),
                           "share_where_M_beats_F3": float((per < 0).mean())}
-    res["reported"] = rep
-    with open(out, "w") as f:
-        json.dump(res, f, indent=1, default=str)
-    dev.log("H1", res["hypotheses"]["H1"]["verdict"], "H2", res["hypotheses"]["H2"]["verdict"])
+    return rep
 
 
 if __name__ == "__main__":
