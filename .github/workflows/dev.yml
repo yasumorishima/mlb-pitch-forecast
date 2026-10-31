@@ -1,0 +1,57 @@
+name: dev
+on:
+  workflow_dispatch:
+    inputs:
+      memo:
+        description: why this run
+        required: true
+      quick:
+        description: first 40 days of each season only (code check, no numbers)
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: dev
+  cancel-in-progress: false
+jobs:
+  dev:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Fetch 2024 and 2025 (2026 is never fetched here)
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          mkdir -p data
+          for y in 2024 2025; do
+            kaggle datasets download yasunorim/mlb-statcast-bat-tracking-2024-2025 -f statcast_$y.parquet -p data
+            if [ -f data/statcast_$y.parquet.zip ]; then unzip -o -q data/statcast_$y.parquet.zip -d data; fi
+          done
+          ls -la data
+          md5sum data/*.parquet
+      - name: Development run
+        run: |
+          Q=""; if [ "${{ inputs.quick }}" = "true" ]; then Q="--quick"; fi
+          mkdir -p out
+          cd src && python dev.py ../data/statcast_2024.parquet ../data/statcast_2025.parquet ../out/dev.json $Q
+      - name: Keep the result on the results branch
+        if: always()
+        env:
+          MEMO: ${{ inputs.memo }}
+        run: |
+          [ -f out/dev.json ] || exit 0
+          cat out/dev.json
+          name="dev_$(date -u +%Y%m%dT%H%M%SZ)_${{ github.sha }}$([ "${{ inputs.quick }}" = "true" ] && echo _quick).json"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin results || true
+          if git rev-parse --verify origin/results >/dev/null 2>&1; then git switch -c results origin/results; else git switch --orphan results; git rm -rf -q . || true; fi
+          mkdir -p results && cp out/dev.json "results/$name"
+          git add results && git commit -q -m "dev result ${{ github.sha }} ($MEMO)" && git push origin results
