@@ -47,19 +47,32 @@ def _get(name):
 
 def _load():
     for attempt in range(3):
-        meta = json.loads(_get("meta.json"))
-        mz, sz = _get("model.json.gz"), _get("state.json.gz")
-        if (hashlib.sha256(mz).hexdigest() == meta["sha256"]["model.json.gz"]
-                and hashlib.sha256(sz).hexdigest() == meta["sha256"]["state.json.gz"]):
-            return meta, mz, sz
-        time.sleep(2 * (attempt + 1))        # an upload is in progress; try again
-    raise RuntimeError("artifacts do not match their meta.json")
+        try:
+            meta = json.loads(_get("meta.json"))
+            mz, sz = _get("model.json.gz"), _get("state.json.gz")
+            if (hashlib.sha256(mz).hexdigest() == meta["sha256"]["model.json.gz"]
+                    and hashlib.sha256(sz).hexdigest() == meta["sha256"]["state.json.gz"]):
+                return meta, mz, sz
+        except Exception:  # noqa: BLE001  (an asset can be missing for a moment while it is replaced)
+            pass
+        time.sleep(2 * (attempt + 1))
+    raise RuntimeError("artifacts unavailable or do not match their meta.json")
 
 
 def artifacts():
-    if "booster" not in _cache or time.time() - _cache["loaded"] > CACHE_SECONDS:
+    if "booster" in _cache and time.time() - _cache["loaded"] <= CACHE_SECONDS:
+        return _cache
+    try:
         meta, mz, sz = _load()
+    except Exception:
+        if "booster" in _cache:                  # keep serving the last good build, try again in 5 minutes
+            _cache["loaded"] = time.time() - CACHE_SECONDS + 300
+            return _cache
+        raise
+    if True:
         booster = sv.Booster(json.loads(gzip.decompress(mz)))
+        if booster.names != meta["features"]:
+            raise RuntimeError("model features differ from meta.json")
         raw = json.loads(gzip.decompress(sz))
 
         def counts(c):
@@ -95,8 +108,10 @@ def clean(req):
         raise ValueError("balls must be 0-3 and strikes 0-2")
     for k in ("game_pitches", "batter_game_pitches"):
         v = req.get(k, [])
-        if not isinstance(v, list) or len(v) > 400:
-            raise ValueError(f"{k} must be a list of at most 400 pitches")
+        if not isinstance(v, list) or len(v) > 400 or not all(isinstance(p, dict) for p in v):
+            raise ValueError(f"{k} must be a list of at most 400 pitch objects")
+    if "pa_prev" in req and not (req["pa_prev"] is None or isinstance(req["pa_prev"], dict)):
+        raise ValueError("pa_prev must be null or a pitch object")
     for p in req.get("game_pitches", []):
         for k in ("balls", "strikes", "at_bat"):
             p[k] = int(p[k])

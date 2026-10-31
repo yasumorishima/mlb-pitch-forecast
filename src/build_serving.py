@@ -177,14 +177,17 @@ def parity_gate(raw, d, X, model, cfg, booster, dates, dh_date, per_date=120, n_
             pl = model.predict(X.iloc[[k]])[0]                    # training path
             dp = float(np.abs(pj - pl).max())
             worst_p = max(worst_p, dp)
-            prob_bad += dp > 1e-6
+            if dp > 1e-6:
+                prob_bad += 1
+                dev.log("probability differs at row", k, "by", dp)
             checked += 1
             fallback += use_fallback
             dh += is_dh
     res = {"checked": checked, "fallback_requests": fallback, "doubleheader_rows": dh,
            "feature_rows_off": feat_bad, "worst_feature_rel_diff": worst_rel,
            "prob_rows_off_1e-6": int(prob_bad), "worst_prob_diff": worst_p}
-    res["pass"] = bool(checked > 0 and feat_bad == 0 and prob_bad <= 0.01 * checked and worst_p < 1e-3)
+    res["pass"] = bool(checked > 0 and fallback > 0 and dh > 0 and feat_bad == 0
+                       and prob_bad <= 0.01 * checked and worst_p < 1e-3)
     dev.log("parity", res)
     return res
 
@@ -282,7 +285,7 @@ def main(out, serve_season, paths, current=None):
 
     seasons = [s for s in (serve_season - 1, serve_season) if s in paths]
     raw_s, d_s = frame(paths, seasons)
-    st = state_from(d_s, cfg)
+    st = state_from(d_s, {n: model_info["cfg"][n] for n in ("F1", "F2", "F3")})
     h_model = write_gz(os.path.join(out, "model.json.gz"), model_dump)
     h_state = write_gz(os.path.join(out, "state.json.gz"), dump_state(st))
     meta = {"serve_season": serve_season, "state_seasons": seasons, "data_through": str(d_s["game_date"].max().date()),

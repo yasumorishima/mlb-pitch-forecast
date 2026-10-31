@@ -31,15 +31,17 @@ jobs:
         run: |
           y=$(date -u +%Y); m=$(date -u +%-m)
           # regular season = March to September; from October the served season is next year
-          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$m" -lt 3 ] || [ "$m" -gt 9 ]; }; then
+          if [ "${{ github.event_name }}" = "schedule" ] && { [ "$m" -lt 3 ] || [ "$m" -gt 10 ]; }; then
             echo "off season; nothing to do"; echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
           if [ "$m" -ge 10 ]; then s=$((y + 1)); else s=$y; fi
-          if [ "$m" -ge 3 ] && [ "$m" -le 9 ]; then live=true; else live=false; fi
+          # fetch the season being played (March to October; the regular season can end in early October)
+          if [ "$m" -ge 3 ] && [ "$m" -le 10 ]; then live=true; f=$y; else live=false; f=$y; fi
           echo "serve=$s" >> "$GITHUB_OUTPUT"
           echo "live=$live" >> "$GITHUB_OUTPUT"
+          echo "fetch=$f" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         if: steps.guard.outputs.run == 'true'
       - uses: actions/setup-python@v5
@@ -61,11 +63,12 @@ jobs:
           for y in $(seq 2027 "$S"); do
             gh release download "data-$y" -p "statcast_$y.parquet" -D data 2>/dev/null || true
           done
-          if [ "${{ steps.guard.outputs.live }}" = "true" ] && [ "$S" -ge 2027 ]; then
-            BASE=""; [ -f "data/statcast_$S.parquet" ] && BASE="--base ../data/statcast_$S.parquet"
-            (cd src && python fetch_savant.py "$S" "../data/statcast_$S.parquet" $BASE)
-            gh release view "data-$S" >/dev/null 2>&1 || gh release create "data-$S" --title "Season $S pitches (Savant)" --notes "Cache for the in-season build."
-            gh release upload "data-$S" "data/statcast_$S.parquet" --clobber
+          F=${{ steps.guard.outputs.fetch }}
+          if [ "${{ steps.guard.outputs.live }}" = "true" ] && [ "$F" -ge 2027 ]; then
+            BASE=""; [ -f "data/statcast_$F.parquet" ] && BASE="--base ../data/statcast_$F.parquet"
+            (cd src && python fetch_savant.py "$F" "../data/statcast_$F.parquet" $BASE)
+            gh release view "data-$F" >/dev/null 2>&1 || gh release create "data-$F" --title "Season $F pitches (Savant)" --notes "Cache for the in-season build."
+            gh release upload "data-$F" "data/statcast_$F.parquet" --clobber
           fi
           ARGS=""
           for f in data/statcast_*.parquet; do y=$(basename "$f" .parquet | cut -d_ -f2); ARGS="$ARGS $y=../$f"; done

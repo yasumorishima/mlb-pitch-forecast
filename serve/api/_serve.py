@@ -167,6 +167,8 @@ def _cls_of(v):
     """Previous-pitch class given as an index (0..9) or a pitch-type code; None/"FIRST" = first pitch."""
     if v is None or v == "FIRST":
         return FIRST
+    if isinstance(v, bool) or not isinstance(v, (int, np.integer, str)):
+        raise ValueError("pa_prev must be a class index or a pitch-type code")
     if isinstance(v, (int, np.integer)):
         if not 0 <= int(v) <= FIRST:
             raise ValueError("pa_prev index must be 0-9")
