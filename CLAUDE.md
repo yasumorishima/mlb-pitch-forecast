@@ -18,6 +18,7 @@ This project is worked on in Claude Code cloud. The owner starts a session with 
 - 2026-11-01: API live at https://mlb-pitch-forecast.vercel.app/api/predict (README `dfe6db6`). The working copy on the owner's Raspberry Pi equals `main` (`dfe6db6`, clean) — nothing unpushed.
 - 2026-11-01: this CLAUDE.md written for cloud.
 - 2026-11-01 (cloud): reachability measured (section below): live API GET/POST 200 from cloud, Release asset `meta.json` 200, Kaggle REST via `www.kaggle.com` 200, `kaggle` CLI fails.
+- 2026-11-06 (owner's PC session): lightgbm 4.5.0 → 4.6.0 and pyarrow 18.1.0 → 23.0.1 for two high Dependabot alerts (PLAN.md Development log has the checks). Serving builds from now on train with 4.6.0; the frozen test stays on 4.5.0 at its commit.
 
 ## Cloud reachability (measured 2026-11-01, cloud session)
 | Check | Result | Proof |
