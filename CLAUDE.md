@@ -19,6 +19,7 @@ This project is worked on in Claude Code cloud. The owner starts a session with 
 - 2026-11-01: this CLAUDE.md written for cloud.
 - 2026-11-01 (cloud): reachability measured (section below): live API GET/POST 200 from cloud, Release asset `meta.json` 200, Kaggle REST via `www.kaggle.com` 200, `kaggle` CLI fails.
 - 2026-11-06 (owner's PC session): lightgbm 4.5.0 → 4.6.0 and pyarrow 18.1.0 → 23.0.1 for two high Dependabot alerts (PLAN.md Development log has the checks). Serving builds from now on train with 4.6.0; the frozen test stays on 4.5.0 at its commit.
+- 2026-11-23 (cloud): added "Evaluation practice (評価の作法, 2026-11 addition)" from Anthropic "Building strong safety evaluations" (owner: 「今後の評価の糧にしたい」); no other section changed. Same addition in mlb-win-probability, npb-foreign-statcast, baseball-bayes, npb-prediction, mlb-data-pipeline, jev-baseball.
 
 ## Cloud reachability (measured 2026-11-01, cloud session)
 | Check | Result | Proof |
@@ -41,6 +42,14 @@ Layout: `src/pfc.py` (features, floors, gates), `src/dev.py` (development run), 
 3. **The served model must stay the tested one.** `build_serving.py` reads the frozen floors, parameters and rounds from `FREEZE.json` and imports `src/pfc.py` / `src/dev.py`. Changing features or settings there changes what the API serves — that needs a new pre-registration (in a new file) before any run, not an edit.
 4. Gates are never loosened to pass (the build's parity gate, booster gate and publish gate; PLAN.md "Gates"). A failed gate is reported as it is.
 5. Report nulls as facts. Code that produces a result gets an independent review before it runs; verify review claims against the code before accepting them.
+
+## Evaluation practice (評価の作法, 2026-11 addition)
+Lessons taken from Anthropic, "Building strong safety evaluations" (2026-11-13), kept only where they change what the next evaluation here does; rules above that already cover a point are not repeated.
+- **Report every slice, changed or not** (any new pre-registration): count group, pitcher hand × batter side, pitcher volume band, pitch class — next to the headline log loss, including slices where the model did not beat F2 / F3. If more than one slice is read as a decision, declare the correction (e.g. Holm).
+- **Keep the paired design:** compare arms on the same pitches with the interval on per-pitcher differences (as the 2026 test and the publish gate do), never two separate log losses.
+- **Write the construct before data** and keep a do-nothing arm (league usage, F2 / F3) in every new test; check that it cannot score well on a new metric before adopting the metric.
+- **Configuration:** a number carries data window, code commit, LightGBM / pyarrow versions and run id; numbers that differ in more than one of these (e.g. the frozen test on LightGBM 4.5.0 vs serving builds on 4.6.0) are not compared as a test.
+- **A surprising number is a harness suspect first** (Savant label revisions, parity gates): re-check before any reading.
 
 ## Next tasks (in order)
 1. **Small fixes:** README says the plan is frozen in `FREEZE.md` — the file is `FREEZE.json`. `build-model.yml` cron comment says "does nothing outside March to September" but the guard runs March–October (`m < 3 || m > 10` → off). Fix both (comment/README only; no logic change).
